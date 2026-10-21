@@ -1,0 +1,15 @@
+# TI's proprietary link library (copied from TI-Nspire Student Software). Never commit.
+pc/ti/
+
+# Ndless release files: download from https://github.com/ndless-nspire/Ndless/releases
+ndless-release/
+
+# Logs and caches
+pc/navnet.log
+__pycache__/
+
+# Build output (llm.tns is attached to GitHub releases instead)
+calc/*.o
+calc/*.elf
+calc/*.tns
+calc/*.zehn
