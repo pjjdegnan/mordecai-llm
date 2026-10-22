@@ -32,6 +32,14 @@ calculator: llm.tns (Ndless C)  --USB link (NavNet service 0x5001)-->  pc/bridge
    python pc/bridge.py --send calc/llm.tns --to /llm
    ```
 
+## One-button launcher
+
+`launcher.pyw` opens a small window with a **Start** button and a choice between the local and cloud models. Start closes TI-Nspire software if it's open, starts Ollama if needed (or loads your API key for cloud), runs the bridge, and tells you when to open `llm` on the calculator. Press esc on the calculator before pressing **Stop**.
+
+To get a desktop shortcut, point a new shortcut at `pythonw.exe` (next to your `python.exe`) with `launcher.pyw` as the argument.
+
+The manual steps below do the same thing.
+
 ## Every time
 
 1. **Close TI-Nspire Student Software.** It holds the USB link.
