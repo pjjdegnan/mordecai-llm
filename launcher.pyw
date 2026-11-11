@@ -12,7 +12,7 @@ import time
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from setup_guide import (BRIDGE, HERE, LLM_TNS, NO_WINDOW, OLLAMA_APP, PYTHON, SetupGuide, api_key,
+from setup_guide import (BRIDGE, HERE, NO_WINDOW, OLLAMA_APP, PYTHON, SetupGuide, api_key,
                          has_anthropic_sdk, ollama_up, powershell, ti_software_pids)
 
 # bridge.py console line -> (status text, colour)
@@ -30,16 +30,26 @@ class Launcher:
         self.root = root
         self.proc = None
         self.chatting = False
-        self.guide = None
         self.lines = queue.Queue()
 
         root.title("Mordecai LLM")
-        root.geometry("460x480")
-        root.minsize(380, 320)
-        frame = ttk.Frame(root, padding=16)
-        frame.pack(fill="both", expand=True)
+        root.minsize(900, 560)
+        page = ttk.Frame(root, padding=16)
+        page.pack(fill="both", expand=True)
+        page.columnconfigure(0, weight=1, uniform="col")
+        page.columnconfigure(2, weight=1, uniform="col")
+        page.rowconfigure(0, weight=1)
 
+        # Left column: setup checklist. Right column: run controls and log.
         self.mode = tk.StringVar(value="local")
+        frame = ttk.Frame(page)
+        frame.grid(row=0, column=2, sticky="nsew")
+        self.log = tk.Text(frame, height=8, font=("Consolas", 9), state="disabled", wrap="word")
+        self.guide = SetupGuide(page, self)
+        self.guide.grid(row=0, column=0, sticky="nsew")
+        ttk.Separator(page, orient="vertical").grid(row=0, column=1, sticky="ns", padx=14)
+
+        ttk.Label(frame, text="Run", font=("Segoe UI", 12, "bold")).pack(anchor="w")
         modes = ttk.Frame(frame)
         modes.pack(fill="x")
         ttk.Radiobutton(modes, text="Local model (llama3.2:3b)", variable=self.mode, value="local").pack(anchor="w")
@@ -47,8 +57,6 @@ class Launcher:
                         value="cloud").pack(anchor="w")
         ttk.Radiobutton(modes, text="Claude (claude-opus-5-5 via the Anthropic API)", variable=self.mode,
                         value="claude").pack(anchor="w")
-        ttk.Button(frame, text="Setup guide (first time, or if something isn't working)",
-                   command=self.open_guide).pack(fill="x", pady=(10, 0))
 
         self.button = tk.Button(frame, text="Start", font=("Segoe UI", 16, "bold"), bg="#1a7f37", fg="white",
                                 activebackground="#116329", activeforeground="white", relief="flat",
@@ -56,26 +64,18 @@ class Launcher:
         self.button.pack(fill="x", pady=(12, 8), ipady=8)
 
         self.status = tk.Label(frame, text="Stopped.", font=("Segoe UI", 12), justify="left", anchor="w",
-                               wraplength=420)
+                               wraplength=430)
         self.status.pack(fill="x")
-        ttk.Label(frame, foreground="#57606a", wraplength=420, justify="left",
-                  text="If the calculator restarted, open ndless/ndless_installer on it first. "
-                       "Quit llm (esc) before pressing Stop.").pack(fill="x", pady=(4, 8))
+        ttk.Label(frame, foreground="#57606a", wraplength=430, justify="left",
+                  text="Keep the calculator on its home screen, press Start, wait for 'Ready', then open "
+                       "llm > llm. After a calculator restart, run the Ndless installer on it first. "
+                       "Press esc on the calculator before pressing Stop.").pack(fill="x", pady=(4, 8))
 
-        self.log = tk.Text(frame, height=10, font=("Consolas", 9), state="disabled", wrap="word")
-        self.log.pack(fill="both", expand=True)
+        self.log.pack(in_=frame, fill="both", expand=True)
 
         root.protocol("WM_DELETE_WINDOW", self.close)
         root.after(200, self.poll)
-        if not os.path.exists(LLM_TNS):
-            root.after(300, self.open_guide)  # first run
-
-    def open_guide(self):
-        if self.guide:
-            self.guide.lift()
-            self.guide.refresh()
-        else:
-            self.guide = SetupGuide(self)
+        root.geometry(f"980x{min(640, root.winfo_screenheight() - 80)}")
 
     def say(self, text):
         self.log.configure(state="normal")

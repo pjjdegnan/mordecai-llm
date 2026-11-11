@@ -39,7 +39,7 @@ calculator: llm.tns (Ndless C)  --USB link (NavNet service 0x5001)-->  pc/bridge
 
 `launcher.pyw` opens a small window with a **Start** button and a choice of local model, Ollama cloud, or Claude. Start closes TI-Nspire software if it's open, starts Ollama if needed (or loads your saved API key), runs the bridge, and tells you when to open `llm` on the calculator. Press esc on the calculator before pressing **Stop**.
 
-**Setup guide:** the launcher's **Setup guide** button (opened automatically the first time) walks through every step in order. It ticks off what's already done and has buttons for what can be automated:
+**Setup checklist:** the left side of the launcher lists every setup step in order. It ticks off what's already done (done steps collapse to one line), and **Re-check** refreshes it. It has buttons for what can be automated:
 - downloading Ndless and `llm.tns`
 - sending them to the calculator
 - starting Ollama or downloading its model

@@ -1,4 +1,4 @@
-"""Step-by-step setup window for the launcher, plus helpers both windows share.
+"""Setup checklist panel for the launcher, plus helpers the launcher shares.
 
 Each step checks itself where it can (TI software, calculator on USB, downloaded
 files, the chosen AI backend) and offers buttons for what can be automated.
@@ -129,44 +129,30 @@ def download(url, path):
 
 # --- the guide window -----------------------------------------------------------
 
-class SetupGuide(tk.Toplevel):
-    def __init__(self, launcher):
-        super().__init__(launcher.root)
+class SetupGuide(ttk.Frame):
+    """Setup checklist panel, embedded at the top of the launcher window."""
+
+    def __init__(self, parent, launcher):
+        super().__init__(parent)
         self.launcher = launcher
         self.events = queue.Queue()
         self.busy = False
 
-        self.title("Mordecai LLM - Setup guide")
-        self.geometry("640x720")
-        self.minsize(520, 560)
-        outer = ttk.Frame(self, padding=14)
-        outer.pack(fill="both", expand=True)
-        ttk.Label(outer, text="Work down the list. Green ticks are done; buttons do the step for you.",
-                  wraplength=600).pack(fill="x")
+        head = ttk.Frame(self)
+        head.pack(fill="x")
+        ttk.Label(head, text="Setup", font=("Segoe UI", 12, "bold")).pack(side="left")
+        self.recheck = ttk.Button(head, text="Re-check", command=self.refresh)
+        self.recheck.pack(side="right")
+        self.activity = ttk.Label(head, foreground="#57606a")
+        self.activity.pack(side="right", padx=8)
 
-        self.steps = ttk.Frame(outer)
-        self.steps.pack(fill="x", pady=(10, 6))
+        self.steps = ttk.Frame(self)
+        self.steps.pack(fill="x", pady=(4, 0))
         self.steps.columnconfigure(1, weight=1)
 
-        bar = ttk.Frame(outer)
-        bar.pack(fill="x")
-        self.recheck = ttk.Button(bar, text="Re-check", command=self.refresh)
-        self.recheck.pack(side="left")
-        self.activity = ttk.Label(bar, foreground="#57606a")
-        self.activity.pack(side="left", padx=10)
-
-        self.log = tk.Text(outer, height=8, font=("Consolas", 9), state="disabled", wrap="word")
-        self.log.pack(fill="both", expand=True, pady=(8, 0))
-
-        self.mode_trace = launcher.mode.trace_add("write", lambda *_: self.refresh())
-        self.protocol("WM_DELETE_WINDOW", self.close)
+        launcher.mode.trace_add("write", lambda *_: self.refresh())
         self.after(200, self.poll)
         self.refresh()
-
-    def close(self):
-        self.launcher.mode.trace_remove("write", self.mode_trace)
-        self.launcher.guide = None
-        self.destroy()
 
     # Checks run on a worker thread (PowerShell is slow); results come back via self.events.
 
@@ -217,10 +203,6 @@ class SetupGuide(tk.Toplevel):
 
         steps.append(self.check_backend(mode))
 
-        steps.append(("Start",
-                      (MANUAL, "Close this guide. With the calculator on its home screen, press Start, wait for "
-                               "'Ready', then open llm > llm on the calculator. Press esc on the calculator "
-                               "before pressing Stop."), []))
         return steps
 
     def check_backend(self, mode):
@@ -263,30 +245,30 @@ class SetupGuide(tk.Toplevel):
             w.destroy()
         for i, (title, (state, detail), actions) in enumerate(steps):
             mark, colour = MARKS[state]
-            tk.Label(self.steps, text=mark, fg=colour, font=("Segoe UI Symbol", 13)).grid(
-                row=2 * i, column=0, rowspan=2, sticky="n", padx=(0, 8), pady=(6, 0))
+            tk.Label(self.steps, text=mark, fg=colour, font=("Segoe UI Symbol", 11)).grid(
+                row=2 * i, column=0, rowspan=2, sticky="n", padx=(0, 6), pady=(3, 0))
             ttk.Label(self.steps, text=f"{i + 1}. {title}", font=("Segoe UI", 10, "bold")).grid(
-                row=2 * i, column=1, sticky="w", pady=(6, 0))
+                row=2 * i, column=1, sticky="w", pady=(3, 0))
             body = ttk.Frame(self.steps)
             body.grid(row=2 * i + 1, column=1, sticky="ew")
-            ttk.Label(body, text=detail, foreground="#57606a", wraplength=560, justify="left").pack(anchor="w")
+            if state != OK:  # done steps collapse to their title
+                ttk.Label(body, text=detail, foreground="#57606a", wraplength=400,
+                          justify="left").pack(anchor="w")
             if actions:
                 row = ttk.Frame(body)
-                row.pack(anchor="w", pady=(3, 0))
+                row.pack(anchor="w", pady=(2, 0))
                 for label, fn in actions:
                     b = ttk.Button(row, text=label, command=fn)
                     b.pack(side="left", padx=(0, 6))
                     if self.busy:
                         b.state(["disabled"])
-        self.activity.configure(text="")
+        todo = sum(s == MISSING for _, (s, _), _ in steps)
+        self.activity.configure(text=f"{todo} to do" if todo else "all checks pass")
 
     # Actions that take a while run on a worker thread too.
 
     def say(self, text):
-        self.log.configure(state="normal")
-        self.log.insert("end", text.rstrip() + "\n")
-        self.log.see("end")
-        self.log.configure(state="disabled")
+        self.launcher.say(text)
 
     def job(self, label, work):
         if self.busy:
@@ -320,7 +302,7 @@ class SetupGuide(tk.Toplevel):
 
     def send(self, files, folder):
         if self.launcher.proc:
-            messagebox.showinfo("Setup guide", "Stop the bridge first (main window), then send.", parent=self)
+            messagebox.showinfo("Setup guide", "Stop the bridge first, then send.", parent=self)
             return
         pids = ti_software_pids()
         if pids:
