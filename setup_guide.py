@@ -88,9 +88,30 @@ def save_api_key(name, value):
                                              SMTO_ABORTIFHUNG, 2000, None)
 
 
-def has_anthropic_sdk():
-    r = subprocess.run([PYTHON, "-c", "import anthropic"], capture_output=True, creationflags=NO_WINDOW)
-    return r.returncode == 0
+def claude_exe():
+    import shutil
+    exe = shutil.which("claude") or os.path.expanduser(r"~\.local\bin\claude.exe")
+    return exe if os.path.exists(exe) else None
+
+
+def claude_logged_in():
+    """True/False for Claude Code's login, or None if Claude Code isn't installed."""
+    exe = claude_exe()
+    if not exe:
+        return None
+    # An API key in the environment would take priority over the subscription login.
+    env = {k: v for k, v in os.environ.items() if k not in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")}
+    try:
+        r = subprocess.run([exe, "auth", "status"], capture_output=True, text=True, env=env, timeout=30,
+                           creationflags=NO_WINDOW)
+        return bool(json.loads(r.stdout).get("loggedIn"))
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return False
+
+
+def claude_login():
+    """Opens a console window running `claude auth login` (it opens the browser)."""
+    subprocess.Popen(["cmd", "/c", "start", "Claude login", "cmd", "/k", claude_exe(), "auth", "login"])
 
 
 def ti_link_library():
@@ -207,18 +228,18 @@ class SetupGuide(ttk.Frame):
 
     def check_backend(self, mode):
         if mode == "claude":
-            sdk, key = has_anthropic_sdk(), api_key("ANTHROPIC_API_KEY")
-            actions = []
-            if not sdk:
-                actions.append(("Install Claude SDK", lambda: self.run_job(
-                    "Installing the anthropic package", [PYTHON, "-m", "pip", "install", "anthropic"])))
-            if not key:
-                actions += [("Get a key", lambda: webbrowser.open("https://platform.claude.com/settings/keys")),
-                            ("Enter key", lambda: self.enter_key("ANTHROPIC_API_KEY", "Claude API key"))]
-            missing = [n for n, ok in (("the anthropic package", sdk), ("an API key", key)) if not ok]
-            return ("AI backend: Claude",
-                    (OK, "SDK installed and API key saved. API use is billed per token by Anthropic.")
-                    if not missing else (MISSING, "Needs " + " and ".join(missing) + "."), actions)
+            logged_in = claude_logged_in()
+            if logged_in is None:
+                return ("AI backend: Claude (subscription)",
+                        (MISSING, "Install Claude Code, then log in with your Claude account."),
+                        [("Get Claude Code", lambda: webbrowser.open("https://claude.com/claude-code"))])
+            if not logged_in:
+                return ("AI backend: Claude (subscription)",
+                        (MISSING, "Log Claude Code in with the account that has your Claude subscription. "
+                                  "A window opens; finish in the browser, then press Re-check."),
+                        [("Log in", claude_login)])
+            return ("AI backend: Claude (subscription)",
+                    (OK, "Claude Code is logged in. Questions count against your plan's usage limits."), [])
         if mode == "cloud":
             key = api_key("OLLAMA_API_KEY")
             return ("AI backend: Ollama cloud",

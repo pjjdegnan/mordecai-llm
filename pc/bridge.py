@@ -5,7 +5,7 @@ Usage:
   python bridge.py --echo          # spike: echo back whatever the calc sends
   python bridge.py --selftest "What is 2+2?"   # Ollama only, no calculator
   python bridge.py --cloud         # use ollama.com (needs OLLAMA_API_KEY)
-  python bridge.py --claude        # use Claude (needs ANTHROPIC_API_KEY and `pip install anthropic`)
+  python bridge.py --claude        # use Claude through your Claude subscription (Claude Code)
   python bridge.py --send ../calc/llm.tns --to /llm   # copy files to the calculator
 """
 import argparse
@@ -23,9 +23,7 @@ SERVICE_ID = 0x5001
 LOCAL_MODEL = "llama3.2:3b"
 CLOUD_URL = "https://ollama.com"
 CLOUD_MODEL = "gpt-oss:120b"
-CLAUDE_MODEL = "claude-opus-5-5"
-# Models that accept the server-side refusal fallback (fallbacks="default").
-FALLBACK_MODELS = {"claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-sonnet-5-5"}
+CLAUDE_MODEL = "opus"
 SYSTEM_PROMPT = (
     "You are running on a TI-Nspire calculator screen (about 50 chars wide, 25 lines). "
     "Answer concisely in plain ASCII text. No markdown, no LaTeX, no tables, no emoji. "
@@ -87,60 +85,44 @@ class Ollama:
 
 
 class Claude:
-    def __init__(self, model, history_turns, effort, api_key=None):
-        import anthropic  # only needed for --claude
+    """Claude via the logged-in Claude Code CLI (`claude -p`), so it uses your
+    Claude subscription instead of an API key."""
 
-        self.anthropic = anthropic
-        # With no key, the SDK falls back to ANTHROPIC_AUTH_TOKEN or an `ant auth login` profile.
-        self.client = anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
+    def __init__(self, model, history_turns):
+        import shutil
+        self.exe = shutil.which("claude") or os.path.expanduser(r"~\.localin\claude.exe")
         self.model = model
-        self.history_turns = history_turns
-        self.effort = effort
-        self.history = []
+        self.session = None  # Claude Code session id, so follow-ups keep context
+        self.cwd = os.path.join(os.environ.get("TEMP", "."), "mordecai-claude")  # no project files/CLAUDE.md
+        os.makedirs(self.cwd, exist_ok=True)
 
     def ask(self, prompt):
+        import subprocess
         if prompt.strip().lower() in ("/new", "/reset", "clear"):
-            self.history = []
+            self.session = None
             return "Conversation cleared."
-        a = self.anthropic
-        extra = {}
-        if self.model in FALLBACK_MODELS:
-            # If a safety classifier declines a harmless question, the API re-runs
-            # it on Anthropic's recommended fallback model instead of refusing.
-            extra = {"betas": ["server-side-fallback-2026-07-01"], "fallbacks": "default"}
+        cmd = [self.exe, "-p", prompt, "--model", self.model, "--system-prompt", SYSTEM_PROMPT, "--tools", "",
+               "--strict-mcp-config", "--setting-sources", "", "--output-format", "json"]
+        if self.session:
+            cmd += ["--resume", self.session]
+        # An API key in the environment would take priority over the subscription login.
+        env = {k: v for k, v in os.environ.items() if k not in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")}
         try:
-            response = self.client.beta.messages.create(
-                model=self.model,
-                max_tokens=16000,
-                system=SYSTEM_PROMPT,
-                messages=self.history[-2 * self.history_turns :] + [{"role": "user", "content": prompt}],
-                output_config={"effort": self.effort},
-                **extra,
-            )
-        except a.AuthenticationError:
-            raise RuntimeError("API key rejected. Check ANTHROPIC_API_KEY.") from None
-        except a.PermissionDeniedError as e:
-            raise RuntimeError(f"Permission denied: {e.message}") from None
-        except a.NotFoundError:
-            raise RuntimeError(f"Unknown model {self.model}.") from None
-        except a.RateLimitError:
-            raise RuntimeError("Rate limited by the Claude API. Wait a bit and retry.") from None
-        except a.APIStatusError as e:
-            raise RuntimeError(f"Claude API error {e.status_code}: {e.message}") from None
-        except a.APIConnectionError:
-            raise RuntimeError("Can't reach the Claude API. Check the internet connection.") from None
-        except TypeError as e:
-            if "authentication" not in str(e):
-                raise
-            raise RuntimeError("No Claude API key. Create one at https://platform.claude.com/settings/keys "
-                               "and set the ANTHROPIC_API_KEY environment variable.") from None
-        if response.stop_reason == "refusal":
-            return "Claude declined to answer that."
-        reply = "".join(b.text for b in response.content if b.type == "text")
-        if response.stop_reason == "max_tokens":
-            reply += "\n[answer cut off]"
-        self.history += [{"role": "user", "content": prompt}, {"role": "assistant", "content": reply}]
-        return reply
+            r = subprocess.run(cmd, cwd=self.cwd, env=env, capture_output=True, text=True, encoding="utf-8",
+                               errors="replace", timeout=300, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except FileNotFoundError:
+            raise RuntimeError("Claude Code isn't installed (claude command not found).") from None
+        try:
+            out = json.loads(r.stdout)
+        except ValueError:
+            raise RuntimeError((r.stderr or r.stdout).strip()[:200] or "claude gave no output") from None
+        if out.get("is_error"):
+            msg = str(out.get("result", ""))
+            if "authenticate" in msg.lower() or "log" in msg.lower():
+                raise RuntimeError("Claude Code isn't logged in. Run `claude` in a terminal and use /login.")
+            raise RuntimeError(msg[:200])
+        self.session = out.get("session_id")
+        return out.get("result", "")
 
 
 def user_env(name):
@@ -160,7 +142,7 @@ def user_env(name):
 
 def make_llm(args):
     if args.claude:
-        return Claude(args.model or CLAUDE_MODEL, args.history, args.effort, user_env("ANTHROPIC_API_KEY"))
+        return Claude(args.model or CLAUDE_MODEL, args.history)
     if args.cloud:
         key = user_env("OLLAMA_API_KEY")
         if not key:
@@ -240,7 +222,7 @@ def serve(args):
     # navnet runs each connection on its own thread and deletes the connection
     # as soon as the callback returns, so the whole session happens inside it.
     nn.start_service(args.service_id, handle)
-    where = " on ollama.com" if args.cloud else " via the Anthropic API" if args.claude else ""
+    where = " on ollama.com" if args.cloud else " via Claude Code" if args.claude else ""
     mode = "echo" if args.echo else f"model {llm.model}{where}"
     say(f"service 0x{args.service_id:04x} started ({mode}); waiting for the calculator's USB link...")
     try:
@@ -269,9 +251,7 @@ def main():
     backend.add_argument("--cloud", action="store_true",
                          help=f"use {CLOUD_URL} instead of local Ollama (API key from OLLAMA_API_KEY)")
     backend.add_argument("--claude", action="store_true",
-                         help="use Claude via the Anthropic API (API key from ANTHROPIC_API_KEY)")
-    ap.add_argument("--effort", default="medium", choices=["low", "medium", "high", "xhigh", "max"],
-                    help="Claude effort level (default: medium)")
+                         help="use Claude through your logged-in Claude Code (your Claude subscription)")
     ap.add_argument("--service-id", type=lambda s: int(s, 0), default=SERVICE_ID)
     ap.add_argument("--max-chars", type=int, default=3000)
     ap.add_argument("--history", type=int, default=6, help="conversation turns to remember")

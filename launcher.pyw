@@ -1,7 +1,8 @@
 """One-button launcher for the calculator bridge.
 
 Start: closes TI-Nspire software (it holds the USB link), makes sure Ollama is
-running (local) or the API key is available (Ollama cloud, Claude), then runs
+running (local), the API key is available (Ollama cloud) or Claude Code is
+logged in (Claude subscription), then runs
 pc/bridge.py and shows its status. Double-click, or run: pythonw launcher.pyw
 """
 import os
@@ -13,7 +14,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from setup_guide import (BRIDGE, HERE, NO_WINDOW, OLLAMA_APP, PYTHON, SetupGuide, api_key,
-                         has_anthropic_sdk, ollama_up, powershell, ti_software_pids)
+                         claude_logged_in, ollama_up, powershell, ti_software_pids)
 
 # bridge.py console line -> (status text, colour)
 STATUSES = [
@@ -55,7 +56,7 @@ class Launcher:
         ttk.Radiobutton(modes, text="Local model (llama3.2:3b)", variable=self.mode, value="local").pack(anchor="w")
         ttk.Radiobutton(modes, text="Cloud model (gpt-oss:120b on ollama.com)", variable=self.mode,
                         value="cloud").pack(anchor="w")
-        ttk.Radiobutton(modes, text="Claude (claude-opus-5-5 via the Anthropic API)", variable=self.mode,
+        ttk.Radiobutton(modes, text="Claude Opus (your Claude subscription, via Claude Code)", variable=self.mode,
                         value="claude").pack(anchor="w")
 
         self.button = tk.Button(frame, text="Start", font=("Segoe UI", 16, "bold"), bg="#1a7f37", fg="white",
@@ -113,15 +114,9 @@ class Launcher:
             time.sleep(2)  # let Windows release the USB device
 
         if mode == "claude":
-            key = api_key("ANTHROPIC_API_KEY")
-            if not key:
-                post(("idle", "No Claude API key. Create one at platform.claude.com/settings/keys, then run:\n"
-                              'setx ANTHROPIC_API_KEY "your-key"'))
+            if not claude_logged_in():
+                post(("idle", "Claude Code isn't installed or logged in. Use the Log in button in Setup."))
                 return
-            if not has_anthropic_sdk():
-                post(("idle", "The Claude SDK isn't installed. Run:\npython -m pip install anthropic"))
-                return
-            env["ANTHROPIC_API_KEY"] = key
         elif mode == "cloud":
             key = api_key("OLLAMA_API_KEY")
             if not key:

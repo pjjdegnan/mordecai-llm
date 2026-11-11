@@ -1,6 +1,6 @@
 # mordecai-llm
 
-Type a question on a TI-Nspire CX II and get an answer from an LLM on your Windows PC. It uses only the normal USB link cable, with no extra hardware. The LLM runs locally through Ollama, on ollama.com, or as Claude through the Anthropic API.
+Type a question on a TI-Nspire CX II and get an answer from an LLM on your Windows PC. It uses only the normal USB link cable, with no extra hardware. The LLM runs locally through Ollama, on ollama.com, or as Claude through your Claude subscription.
 
 ```
 calculator: llm.tns (Ndless C)  --USB link (NavNet service 0x5001)-->  pc/bridge.py (TI navnet.dll)  --HTTP-->  Ollama
@@ -18,7 +18,7 @@ calculator: llm.tns (Ndless C)  --USB link (NavNet service 0x5001)-->  pc/bridge
 - One LLM backend:
   - [Ollama](https://ollama.com) with a model pulled (default `llama3.2:3b`)
   - an ollama.com API key, for `--cloud`
-  - an Anthropic API key plus `python -m pip install anthropic`, for `--claude`
+  - [Claude Code](https://claude.com/claude-code) logged in with a Claude subscription, for `--claude`
 
 ### Optional: keep TI's DLL working if the TI software goes away
 
@@ -37,13 +37,13 @@ calculator: llm.tns (Ndless C)  --USB link (NavNet service 0x5001)-->  pc/bridge
 
 ## One-button launcher
 
-`launcher.pyw` opens a small window with a **Start** button and a choice of local model, Ollama cloud, or Claude. Start closes TI-Nspire software if it's open, starts Ollama if needed (or loads your saved API key), runs the bridge, and tells you when to open `llm` on the calculator. Press esc on the calculator before pressing **Stop**.
+`launcher.pyw` opens a small window with a **Start** button and a choice of local model, Ollama cloud, or Claude. Start closes TI-Nspire software if it's open, starts Ollama if needed (or checks your saved API key or Claude login), runs the bridge, and tells you when to open `llm` on the calculator. Press esc on the calculator before pressing **Stop**.
 
 **Setup checklist:** the left side of the launcher lists every setup step in order. It ticks off what's already done (done steps collapse to one line), and **Re-check** refreshes it. It has buttons for what can be automated:
 - downloading Ndless and `llm.tns`
 - sending them to the calculator
 - starting Ollama or downloading its model
-- installing the Claude SDK
+- logging Claude Code in
 - saving API keys
 
 Steps that happen on the calculator, such as checking the OS version and running the Ndless installer, are explained in place.
@@ -86,41 +86,37 @@ Larger models such as `gpt-oss:120b` run on ollama.com instead of your GPU, and 
 
 Never put the key in a file in this repo.
 
-## Using Claude
+## Using Claude (with your Claude subscription)
 
-`--claude` sends questions to Claude through the Anthropic API, using the official `anthropic` Python SDK. The default model is `claude-opus-5-5`. Usage is billed to your Anthropic account per token; see [pricing](https://platform.claude.com/docs/en/about-claude/pricing). A typical calculator question costs a fraction of a cent.
+`--claude` sends questions through [Claude Code](https://claude.com/claude-code) (`claude -p`), logged in with your Claude account, so it uses your Pro or Max subscription. No API key is needed. Questions count against your plan's usage limits, and each answer has a few seconds of extra startup. The default model is `opus`.
 
-1. Install the SDK (once):
+1. Install Claude Code, then log in once with the account that has your subscription:
    ```bash
-   python -m pip install anthropic
+   claude auth login
    ```
-2. Create an API key at [platform.claude.com/settings/keys](https://platform.claude.com/settings/keys) and store it (once), then open a new terminal:
+2. Test it without the calculator, then start the bridge:
    ```bash
-   setx ANTHROPIC_API_KEY "paste-your-key-here"
-   ```
-3. Test it without the calculator, then start the bridge:
-   ```bash
-   python pc/bridge.py --claude --selftest "what is the derivative of (2x+3)/(x+1)"
+   python pc/bridge.py --claude --selftest "what is 2+2"
    ```
    ```bash
    python pc/bridge.py --claude
    ```
 
-Options:
-- **Other models:** `--claude --model claude-haiku-5-5` is much cheaper and faster for simple questions, and `claude-sonnet-5-5` sits in between.
-- **Effort:** `--effort low|medium|high|xhigh|max` trades speed and cost for more careful reasoning (default `medium`). Try `high` for hard math.
-- **Refusal fallback:** if Claude's safety filter wrongly declines a harmless question, the API retries it on Anthropic's recommended fallback model automatically (`fallbacks: "default"`), on the models that support it.
+Notes:
+- **Other models:** `--claude --model sonnet` or `--model haiku`, whichever your plan offers.
+- **Isolation:** Claude runs with all tools turned off, in an empty temporary folder, without your Claude Code settings or MCP servers. It can only answer.
+- **API keys:** an `ANTHROPIC_API_KEY` in your environment is ignored, so the subscription login is always used.
+- **Terms:** check Anthropic's current consumer terms if you plan to rely on this; it's personal use through Claude Code.
 
-The launcher has a **Claude** option that does the same.
+The launcher's **Claude Opus** option does the same, and its Setup checklist has a **Log in** button.
 
 ## Bridge options
 
 | flag | meaning |
 |---|---|
-| `--model qwen3:4b` | model name (default `llama3.2:3b`, `gpt-oss:120b` with `--cloud`, `claude-opus-5-5` with `--claude`) |
+| `--model qwen3:4b` | model name (default `llama3.2:3b`, `gpt-oss:120b` with `--cloud`, `opus` with `--claude`) |
 | `--cloud` | use ollama.com instead of local Ollama; needs `OLLAMA_API_KEY` |
-| `--claude` | use Claude via the Anthropic API; needs `ANTHROPIC_API_KEY` and the `anthropic` package |
-| `--effort medium` | Claude only: `low`, `medium`, `high`, `xhigh` or `max` |
+| `--claude` | use Claude through your logged-in Claude Code (your subscription) |
 | `--echo` | link test: echoes the calculator's text back, no LLM |
 | `--selftest "2+2?"` | LLM test only, no calculator |
 | `--max-chars 3000` | cap on reply length |
