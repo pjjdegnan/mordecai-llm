@@ -1,10 +1,11 @@
-"""Relay prompts from a TI-Nspire (llm.tns over USB) to a local Ollama model.
+"""Relay prompts from a TI-Nspire (llm.tns over USB) to Ollama or Claude.
 
 Usage:
   python bridge.py                 # serve the calculator
   python bridge.py --echo          # spike: echo back whatever the calc sends
   python bridge.py --selftest "What is 2+2?"   # Ollama only, no calculator
   python bridge.py --cloud         # use ollama.com (needs OLLAMA_API_KEY)
+  python bridge.py --claude        # use Claude (needs ANTHROPIC_API_KEY and `pip install anthropic`)
   python bridge.py --send ../calc/llm.tns --to /llm   # copy files to the calculator
 """
 import argparse
@@ -22,6 +23,9 @@ SERVICE_ID = 0x5001
 LOCAL_MODEL = "llama3.2:3b"
 CLOUD_URL = "https://ollama.com"
 CLOUD_MODEL = "gpt-oss:120b"
+CLAUDE_MODEL = "claude-opus-5-5"
+# Models that accept the server-side refusal fallback (fallbacks="default").
+FALLBACK_MODELS = {"claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-sonnet-5-5"}
 SYSTEM_PROMPT = (
     "You are running on a TI-Nspire calculator screen (about 50 chars wide, 25 lines). "
     "Answer concisely in plain ASCII text. No markdown, no LaTeX, no tables, no emoji. "
@@ -82,9 +86,83 @@ class Ollama:
         return reply
 
 
+class Claude:
+    def __init__(self, model, history_turns, effort, api_key=None):
+        import anthropic  # only needed for --claude
+
+        self.anthropic = anthropic
+        # With no key, the SDK falls back to ANTHROPIC_AUTH_TOKEN or an `ant auth login` profile.
+        self.client = anthropic.Anthropic(api_key=api_key) if api_key else anthropic.Anthropic()
+        self.model = model
+        self.history_turns = history_turns
+        self.effort = effort
+        self.history = []
+
+    def ask(self, prompt):
+        if prompt.strip().lower() in ("/new", "/reset", "clear"):
+            self.history = []
+            return "Conversation cleared."
+        a = self.anthropic
+        extra = {}
+        if self.model in FALLBACK_MODELS:
+            # If a safety classifier declines a harmless question, the API re-runs
+            # it on Anthropic's recommended fallback model instead of refusing.
+            extra = {"betas": ["server-side-fallback-2026-07-01"], "fallbacks": "default"}
+        try:
+            response = self.client.beta.messages.create(
+                model=self.model,
+                max_tokens=16000,
+                system=SYSTEM_PROMPT,
+                messages=self.history[-2 * self.history_turns :] + [{"role": "user", "content": prompt}],
+                output_config={"effort": self.effort},
+                **extra,
+            )
+        except a.AuthenticationError:
+            raise RuntimeError("API key rejected. Check ANTHROPIC_API_KEY.") from None
+        except a.PermissionDeniedError as e:
+            raise RuntimeError(f"Permission denied: {e.message}") from None
+        except a.NotFoundError:
+            raise RuntimeError(f"Unknown model {self.model}.") from None
+        except a.RateLimitError:
+            raise RuntimeError("Rate limited by the Claude API. Wait a bit and retry.") from None
+        except a.APIStatusError as e:
+            raise RuntimeError(f"Claude API error {e.status_code}: {e.message}") from None
+        except a.APIConnectionError:
+            raise RuntimeError("Can't reach the Claude API. Check the internet connection.") from None
+        except TypeError as e:
+            if "authentication" not in str(e):
+                raise
+            raise RuntimeError("No Claude API key. Create one at https://platform.claude.com/settings/keys "
+                               "and set the ANTHROPIC_API_KEY environment variable.") from None
+        if response.stop_reason == "refusal":
+            return "Claude declined to answer that."
+        reply = "".join(b.text for b in response.content if b.type == "text")
+        if response.stop_reason == "max_tokens":
+            reply += "\n[answer cut off]"
+        self.history += [{"role": "user", "content": prompt}, {"role": "assistant", "content": reply}]
+        return reply
+
+
+def user_env(name):
+    """An environment variable, also read from the saved user settings (setx), which
+    processes started before it was set don't see."""
+    value = os.environ.get(name)
+    if value or sys.platform != "win32":
+        return value
+    import winreg
+
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as k:
+            return winreg.QueryValueEx(k, name)[0]
+    except OSError:
+        return None
+
+
 def make_llm(args):
+    if args.claude:
+        return Claude(args.model or CLAUDE_MODEL, args.history, args.effort, user_env("ANTHROPIC_API_KEY"))
     if args.cloud:
-        key = os.environ.get("OLLAMA_API_KEY")
+        key = user_env("OLLAMA_API_KEY")
         if not key:
             sys.exit("--cloud needs an API key: create one at https://ollama.com/settings/keys "
                      "and set the OLLAMA_API_KEY environment variable.")
@@ -162,7 +240,8 @@ def serve(args):
     # navnet runs each connection on its own thread and deletes the connection
     # as soon as the callback returns, so the whole session happens inside it.
     nn.start_service(args.service_id, handle)
-    mode = "echo" if args.echo else f"model {llm.model}" + (" on ollama.com" if args.cloud else "")
+    where = " on ollama.com" if args.cloud else " via the Anthropic API" if args.claude else ""
+    mode = "echo" if args.echo else f"model {llm.model}{where}"
     say(f"service 0x{args.service_id:04x} started ({mode}); waiting for the calculator's USB link...")
     try:
         # navnet only brings up the USB link to the calculator while someone
@@ -183,10 +262,16 @@ def serve(args):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--model", help=f"default: {LOCAL_MODEL} locally, {CLOUD_MODEL} with --cloud")
+    ap.add_argument("--model", help=f"default: {LOCAL_MODEL} locally, {CLOUD_MODEL} with --cloud, "
+                                    f"{CLAUDE_MODEL} with --claude")
     ap.add_argument("--ollama", default="http://localhost:11434", help="local Ollama URL")
-    ap.add_argument("--cloud", action="store_true",
-                    help=f"use {CLOUD_URL} instead of local Ollama (API key from OLLAMA_API_KEY)")
+    backend = ap.add_mutually_exclusive_group()
+    backend.add_argument("--cloud", action="store_true",
+                         help=f"use {CLOUD_URL} instead of local Ollama (API key from OLLAMA_API_KEY)")
+    backend.add_argument("--claude", action="store_true",
+                         help="use Claude via the Anthropic API (API key from ANTHROPIC_API_KEY)")
+    ap.add_argument("--effort", default="medium", choices=["low", "medium", "high", "xhigh", "max"],
+                    help="Claude effort level (default: medium)")
     ap.add_argument("--service-id", type=lambda s: int(s, 0), default=SERVICE_ID)
     ap.add_argument("--max-chars", type=int, default=3000)
     ap.add_argument("--history", type=int, default=6, help="conversation turns to remember")

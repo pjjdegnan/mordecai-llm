@@ -1,24 +1,19 @@
 """One-button launcher for the calculator bridge.
 
 Start: closes TI-Nspire software (it holds the USB link), makes sure Ollama is
-running (local) or the API key is available (cloud), then runs pc/bridge.py and
-shows its status. Double-click, or run: pythonw launcher.pyw
+running (local) or the API key is available (Ollama cloud, Claude), then runs
+pc/bridge.py and shows its status. Double-click, or run: pythonw launcher.pyw
 """
 import os
 import queue
 import subprocess
-import sys
 import threading
 import time
 import tkinter as tk
-import urllib.request
 from tkinter import messagebox, ttk
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-BRIDGE = os.path.join(HERE, "pc", "bridge.py")
-PYTHON = os.path.join(os.path.dirname(sys.executable), "python.exe")
-OLLAMA_APP = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Ollama", "ollama app.exe")
-NO_WINDOW = subprocess.CREATE_NO_WINDOW
+from setup_guide import (BRIDGE, HERE, LLM_TNS, NO_WINDOW, OLLAMA_APP, PYTHON, SetupGuide, api_key,
+                         has_anthropic_sdk, ollama_up, powershell, ti_software_pids)
 
 # bridge.py console line -> (status text, colour)
 STATUSES = [
@@ -30,48 +25,16 @@ STATUSES = [
 ]
 
 
-def powershell(cmd):
-    r = subprocess.run(["powershell", "-NoProfile", "-Command", cmd], capture_output=True, text=True,
-                       creationflags=NO_WINDOW)
-    return r.stdout.strip()
-
-
-def ti_software_pids():
-    out = powershell("Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like '*TI Education*' } "
-                     "| ForEach-Object { $_.ProcessId }")
-    return [int(p) for p in out.split()]
-
-
-def ollama_up():
-    try:
-        urllib.request.urlopen("http://localhost:11434/api/tags", timeout=2).close()
-        return True
-    except OSError:
-        return False
-
-
-def api_key():
-    key = os.environ.get("OLLAMA_API_KEY")
-    if key:
-        return key
-    # setx stores it for the user; processes started earlier don't see it.
-    import winreg
-    try:
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as k:
-            return winreg.QueryValueEx(k, "OLLAMA_API_KEY")[0]
-    except OSError:
-        return None
-
-
 class Launcher:
     def __init__(self, root):
         self.root = root
         self.proc = None
         self.chatting = False
+        self.guide = None
         self.lines = queue.Queue()
 
         root.title("Mordecai LLM")
-        root.geometry("460x420")
+        root.geometry("460x480")
         root.minsize(380, 320)
         frame = ttk.Frame(root, padding=16)
         frame.pack(fill="both", expand=True)
@@ -82,6 +45,10 @@ class Launcher:
         ttk.Radiobutton(modes, text="Local model (llama3.2:3b)", variable=self.mode, value="local").pack(anchor="w")
         ttk.Radiobutton(modes, text="Cloud model (gpt-oss:120b on ollama.com)", variable=self.mode,
                         value="cloud").pack(anchor="w")
+        ttk.Radiobutton(modes, text="Claude (claude-opus-5-5 via the Anthropic API)", variable=self.mode,
+                        value="claude").pack(anchor="w")
+        ttk.Button(frame, text="Setup guide (first time, or if something isn't working)",
+                   command=self.open_guide).pack(fill="x", pady=(10, 0))
 
         self.button = tk.Button(frame, text="Start", font=("Segoe UI", 16, "bold"), bg="#1a7f37", fg="white",
                                 activebackground="#116329", activeforeground="white", relief="flat",
@@ -100,6 +67,15 @@ class Launcher:
 
         root.protocol("WM_DELETE_WINDOW", self.close)
         root.after(200, self.poll)
+        if not os.path.exists(LLM_TNS):
+            root.after(300, self.open_guide)  # first run
+
+    def open_guide(self):
+        if self.guide:
+            self.guide.lift()
+            self.guide.refresh()
+        else:
+            self.guide = SetupGuide(self)
 
     def say(self, text):
         self.log.configure(state="normal")
@@ -126,18 +102,28 @@ class Launcher:
                 return
             powershell("Stop-Process -Force -Id " + ",".join(map(str, pids)))
             self.say("closed TI-Nspire software")
-        cloud = self.mode.get() == "cloud"
-        threading.Thread(target=self.start, args=(cloud, bool(pids)), daemon=True).start()
+        mode = self.mode.get()
+        threading.Thread(target=self.start, args=(mode, bool(pids)), daemon=True).start()
 
-    def start(self, cloud, closed_ti):
+    def start(self, mode, closed_ti):
         """Runs on a worker thread; UI updates go through self.lines."""
         post = self.lines.put
         env = dict(os.environ)
         if closed_ti:
             time.sleep(2)  # let Windows release the USB device
 
-        if cloud:
-            key = api_key()
+        if mode == "claude":
+            key = api_key("ANTHROPIC_API_KEY")
+            if not key:
+                post(("idle", "No Claude API key. Create one at platform.claude.com/settings/keys, then run:\n"
+                              'setx ANTHROPIC_API_KEY "your-key"'))
+                return
+            if not has_anthropic_sdk():
+                post(("idle", "The Claude SDK isn't installed. Run:\npython -m pip install anthropic"))
+                return
+            env["ANTHROPIC_API_KEY"] = key
+        elif mode == "cloud":
+            key = api_key("OLLAMA_API_KEY")
             if not key:
                 post(("idle", "No API key. Create one at ollama.com/settings/keys, then run:\n"
                               'setx OLLAMA_API_KEY "your-key"'))
@@ -157,7 +143,7 @@ class Launcher:
                 post(("idle", "Ollama didn't start. Open it from the Start menu and try again."))
                 return
 
-        args = [PYTHON, "-u", BRIDGE] + (["--cloud"] if cloud else [])
+        args = [PYTHON, "-u", BRIDGE] + {"cloud": ["--cloud"], "claude": ["--claude"]}.get(mode, [])
         self.proc = subprocess.Popen(args, cwd=HERE, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                      text=True, encoding="utf-8", errors="replace", creationflags=NO_WINDOW)
         post(("running", None))
